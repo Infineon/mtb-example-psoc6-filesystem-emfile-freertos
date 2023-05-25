@@ -8,7 +8,7 @@
 *
 *
 *******************************************************************************
-* Copyright 2021, Cypress Semiconductor Corporation (an Infineon company) or
+* Copyright 2021-2023, Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
 *
 * This software, including source code, documentation and related
@@ -49,7 +49,7 @@
 /* FreeRTOS headers */
 #include "FreeRTOS.h"
 #include "task.h"
-
+#include <inttypes.h>
 /*******************************************************************************
 * Macros
 ********************************************************************************/
@@ -72,11 +72,17 @@
 /*******************************************************************************
  * Global Variables
  ******************************************************************************/
-static char fileData[NUM_BYTES_TO_READ_FROM_FILE];
+static char file_data[NUM_BYTES_TO_READ_FROM_FILE];
 static TaskHandle_t emfile_task_handle;
+cyhal_gpio_callback_data_t user_btn_callback_data;
 
 /* This enables RTOS aware debugging */
 volatile int uxTopUsedPriority;
+
+/*******************************************************************************
+* Function Prototypes
+*******************************************************************************/
+static void user_button_interrupt_handler(void *handler_arg, cyhal_gpio_event_t event);
 
 
 /*******************************************************************************
@@ -117,7 +123,7 @@ static void check_error(char *message, int error)
 *  cyhal_gpio_irq_event_t (unused)
 *
 *******************************************************************************/
-static void user_button_interrupt_handler(void *handler_arg, cyhal_gpio_irq_event_t event)
+static void user_button_interrupt_handler(void *handler_arg, cyhal_gpio_event_t event)
 {
     (void) handler_arg;
     (void) event;
@@ -145,11 +151,11 @@ static void user_button_interrupt_handler(void *handler_arg, cyhal_gpio_irq_even
 *******************************************************************************/
 static void emfile_task(void* arg)
 {
-    U32         varU32;
-    U32         numBytesToRead;
+    U32    volume_size;
+    U32    num_bytes_to_read;
     int         error;
-    FS_FILE    *filePtr;
-    const char *volumeName = "";
+    FS_FILE    *file_ptr;
+    const char *volume_name = "";
 
 #if defined(USE_SD_CARD)
     printf("Using SD card as storage device\n");
@@ -162,26 +168,26 @@ static void emfile_task(void* arg)
 
 #if !defined(USE_SD_CARD)
     /* Check if low-level format is required. Applicable only for NOR flash. */
-    error = FS_FormatLLIfRequired(volumeName);
+    error = FS_FormatLLIfRequired(volume_name);
     check_error("Error in low-level formatting", error);
 #endif /* #if !defined(USE_SD_CARD) */
 
     /* Check if volume needs to be high-level formatted. */
-    error = FS_IsHLFormatted(volumeName);
+    error = FS_IsHLFormatted(volume_name);
     check_error("Error in checking if volume is high-level formatted", error);
 
     /* Return value of 0 indicates that high-level format is required. */
     if (error == 0)
     {
         printf("Perform high-level format\n");
-        error = FS_Format(volumeName, NULL);
+        error = FS_Format(volume_name, NULL);
         check_error("Error in high-level formatting", error);
     }
 
-    varU32 = FS_GetVolumeSizeKB(volumeName);
-    printf("Volume size: %lu KB\n\n", varU32);
+    volume_size = FS_GetVolumeSizeKB(volume_name);
+    printf("Volume size: %"PRIu32" KB\n\n", volume_size);
 
-    if(0U == varU32)
+    if(0U == volume_size)
     {
         printf("Error in checking the volume size\n");
         CY_ASSERT(0U);
@@ -190,35 +196,35 @@ static void emfile_task(void* arg)
     printf("Opening the file for reading...\n");
 
     /* Open the file for reading. */
-    filePtr = FS_FOpen(FILE_NAME, "r");
+    file_ptr = FS_FOpen(FILE_NAME, "r");
 
-    if (filePtr != NULL)
+    if (file_ptr != NULL)
     {
         /* Last byte is for storing the NULL character. */
-        numBytesToRead = sizeof(fileData) - 1U;
-        varU32 = FS_GetFileSize(filePtr);
+        num_bytes_to_read = sizeof(file_data) - 1U;
+        volume_size = FS_GetFileSize(file_ptr);
 
-        if(varU32 < numBytesToRead)
+        if(volume_size < num_bytes_to_read)
         {
-            numBytesToRead = varU32;
+            num_bytes_to_read = volume_size;
         }
 
-        printf("Reading %lu bytes from the file. ", numBytesToRead);
-        varU32 = FS_Read(filePtr, fileData, numBytesToRead);
+        printf("Reading %"PRIu32" bytes from the file. ", num_bytes_to_read);
+        volume_size = FS_Read(file_ptr, file_data, num_bytes_to_read);
 
-        if(varU32 != numBytesToRead)
+        if(volume_size != num_bytes_to_read)
         {
-            error = FS_FError(filePtr);
+            error = FS_FError(file_ptr);
             check_error("Error in reading from the file", error);
         }
         
         /* Terminate the string using NULL. */
-        fileData[numBytesToRead] = '\0';
+        file_data[num_bytes_to_read] = '\0';
 
         /* Display the file content. */
-        printf("File Content:\n\"%s\"\n", fileData);
+        printf("File Content:\n\"%s\"\n", file_data);
 
-        error = FS_FClose(filePtr);
+        error = FS_FClose(file_ptr);
         check_error("Error in closing the file", error);
         
         printf("\nOpening the file for overwriting...\n");
@@ -232,15 +238,15 @@ static void emfile_task(void* arg)
     /* Mode 'w' truncates the file size to zero if the file exists otherwise
      * creates a new file.
      */
-    filePtr = FS_FOpen(FILE_NAME, "w");
+    file_ptr = FS_FOpen(FILE_NAME, "w");
 
-    if(filePtr != NULL)
+    if(file_ptr != NULL)
     {
-        varU32 = FS_Write(filePtr, STRING_TO_WRITE, strlen(STRING_TO_WRITE));
+        volume_size = FS_Write(file_ptr, STRING_TO_WRITE, strlen(STRING_TO_WRITE));
 
-        if(varU32 != strlen(STRING_TO_WRITE))
+        if(volume_size != strlen(STRING_TO_WRITE))
         {
-            error = FS_FError(filePtr);
+            error = FS_FError(file_ptr);
             check_error("Error in writing to the file", error);
         }
 
@@ -251,7 +257,7 @@ static void emfile_task(void* arg)
         printf("You can now view the file content in your PC. File name is \"%s\"\n", FILE_NAME);
 #endif /* #if defined(USE_SD_CARD) */
 
-        error = FS_FClose(filePtr);
+        error = FS_FClose(file_ptr);
         check_error("Error in closing the file", error);
 
         /* Enable the user button interrupt */
@@ -277,7 +283,7 @@ static void emfile_task(void* arg)
         error = FS_Remove(FILE_NAME);
         check_error("Error in deleting the file", error);
 
-        FS_Unmount(volumeName);
+        FS_Unmount(volume_name);
 
         printf("Filesystem operations completed successfully!\n");
         printf("Press reset to the run the example again.\n");
@@ -324,8 +330,12 @@ int main(void)
     result = cyhal_gpio_init(CYBSP_USER_BTN, CYHAL_GPIO_DIR_INPUT, CYHAL_GPIO_DRIVE_PULLUP, CYBSP_BTN_OFF);
     CY_ASSERT (result == CY_RSLT_SUCCESS);
 
+
+    /* Configure user button interrupt */
+    user_btn_callback_data.callback = user_button_interrupt_handler;
+
     /* Configure & the user button interrupt */
-    cyhal_gpio_register_callback(CYBSP_USER_BTN, user_button_interrupt_handler, NULL);
+    cyhal_gpio_register_callback(CYBSP_USER_BTN, &user_btn_callback_data);
 
     /* Enable global interrupts */
     __enable_irq();
